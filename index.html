@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro 3D Maze Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Courier New', Courier, monospace;
+            user-select: none;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* Retro HUD Styling */
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #hearts {
+            font-size: 28px;
+            color: #ff0000;
+            text-shadow: 2px 2px 0px #000;
+        }
+
+        #coin-counter {
+            font-size: 24px;
+            color: #ffd700;
+            font-weight: bold;
+            text-shadow: 2px 2px 0px #000;
+        }
+
+        #options-btn {
+            font-size: 24px;
+            color: #00ccff;
+            font-weight: bold;
+            text-shadow: 2px 2px 0px #000;
+        }
+
+        #win-screen, #game-over-screen {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 36px;
+            text-align: center;
+            background: rgba(0,0,0,0.85);
+            padding: 30px;
+            z-index: 20;
+        }
+
+        #win-screen {
+            color: #00ff00;
+            border: 4px solid #00ff00;
+        }
+
+        #game-over-screen {
+            color: #ff0000;
+            border: 4px solid #ff0000;
+        }
+    </style>
+
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="hud">
+        <div id="hearts">❤️❤️❤️</div>
+        <div id="coin-counter">COINS: 0 / 0</div>
+        <div id="options-btn">OPTIONS</div>
+    </div>
+
+    <div id="win-screen">
+        🎉 MAZE CLEARED! 🎉<br>
+        <span style="font-size:20px; color:#fff;">All coins collected!</span>
+    </div>
+
+    <div id="game-over-screen">
+        💀 GAME OVER 💀<br>
+        <span style="font-size:20px; color:#fff;">The ghosts caught you!</span>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- 1. GAME SETUP & SCENE CREATION ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        container.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+        scene.add(ambientLight);
+
+        // Game State Variables
+        let playerLives = 3;
+        let isInvulnerable = false;
+        let gameOver = false;
+
+        // --- 2. PROCEDURAL TEXTURES (Retro Style) ---
+        
+        // Realistic Red Brick Wall Texture matching reference image
+        function createBrickTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512; 
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            
+            // Base warm dark red/brown mortar background
+            ctx.fillStyle = '#3a170e';
+            ctx.fillRect(0, 0, 512, 512);
+
+            const rows = 16;
+            const rowHeight = 512 / rows;
+            const brickWidth = 64;
+
+            for (let i = 0; i < rows; i++) {
+                const offset = (i % 2) * (brickWidth / 2);
+                const y = i * rowHeight;
+
+                for (let j = -1; j <= 512 / brickWidth + 1; j++) {
+                    const x = j * brickWidth + offset;
+
+                    // Vary brick colors for a warm, vintage brick look
+                    const shade = Math.random();
+                    let red = 170 + Math.floor(shade * 50);
+                    let green = 35 + Math.floor(shade * 25);
+                    let blue = 15 + Math.floor(shade * 15);
+
+                    ctx.fillStyle = `rgb(${red},${green},${blue})`;
+                    ctx.fillRect(x + 2, y + 2, brickWidth - 4, rowHeight - 4);
+
+                    // Add subtle texture noise/shading
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+                    ctx.fillRect(x + 2, y + rowHeight / 2, brickWidth - 4, rowHeight / 2 - 2);
+                }
+            }
+
+            // Vignette & Shadow Overlay
+            const gradient = ctx.createLinearGradient(0, 0, 512, 512);
+            gradient.addColorStop(0, 'rgba(0,0,0,0.2)');
+            gradient.addColorStop(0.5, 'rgba(0,0,0,0)');
+            gradient.addColorStop(1, 'rgba(0,0,0,0.35)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 512, 512);
+
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // Procedural Ghost Sprite Texture matching the provided sheet ghost image
+        function createMonsterTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; 
+            canvas.height = 384;
+            const ctx = canvas.getContext('2d');
+
+            ctx.clearRect(0, 0, 256, 384);
+
+            // Flowing White Sheet Outline & Body Shape
+            ctx.beginPath();
+            ctx.moveTo(128, 20);
+            // Curved dome top (head)
+            ctx.bezierCurveTo(50, 20, 25, 100, 25, 180);
+            // Draped body down to wavy bottom trim
+            ctx.bezierCurveTo(20, 260, 10, 310, 15, 360);
+            // Wavy bottom skirt folds
+            ctx.bezierCurveTo(45, 330, 65, 370, 90, 340);
+            ctx.bezierCurveTo(115, 370, 140, 330, 165, 365);
+            ctx.bezierCurveTo(190, 335, 215, 370, 240, 350);
+            ctx.bezierCurveTo(245, 300, 235, 260, 231, 180);
+            ctx.bezierCurveTo(231, 100, 206, 20, 128, 20);
+            ctx.closePath();
+
+            // Gradient for soft translucent white fabric & glowing top highlight
+            const bodyGradient = ctx.createRadialGradient(128, 120, 10, 128, 200, 180);
+            bodyGradient.addColorStop(0, '#ffffff');
+            bodyGradient.addColorStop(0.6, '#f0f4f8');
+            bodyGradient.addColorStop(0.85, '#d0dbe5');
+            bodyGradient.addColorStop(1, '#a3b8cc');
+
+            ctx.fillStyle = bodyGradient;
+            ctx.fill();
+
+            // Inner Fabric Fold Shadows for realistic depth
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = 'rgba(120, 140, 160, 0.35)';
+
+            // Vertical fold lines
+            ctx.beginPath();
+            ctx.moveTo(60, 200); ctx.bezierCurveTo(55, 270, 45, 310, 50, 350);
+            ctx.moveTo(100, 220); ctx.bezierCurveTo(95, 280, 90, 315, 95, 345);
+            ctx.moveTo(155, 220); ctx.bezierCurveTo(160, 280, 165, 315, 160, 355);
+            ctx.moveTo(195, 200); ctx.bezierCurveTo(200, 270, 210, 310, 205, 355);
+            ctx.stroke();
+
+            // Soft glowing multicolored light effect at top of head
+            const glowGradient = ctx.createRadialGradient(128, 35, 0, 128, 35, 45);
+            glowGradient.addColorStop(0, 'rgba(255, 220, 200, 0.6)');
+            glowGradient.addColorStop(0.5, 'rgba(180, 255, 200, 0.4)');
+            glowGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = glowGradient;
+            ctx.beginPath();
+            ctx.arc(128, 35, 45, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Black Oval Eyes (Slightly tilted inward for iconic ghost expression)
+            ctx.fillStyle = '#0a0a0a';
+
+            // Left Eye
+            ctx.beginPath();
+            ctx.ellipse(102, 95, 16, 26, -0.1, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Right Eye
+            ctx.beginPath();
+            ctx.ellipse(154, 95, 16, 26, 0.1, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Large Open Screaming/Gasping Mouth
+            ctx.beginPath();
+            ctx.moveTo(112, 140);
+            ctx.bezierCurveTo(100, 140, 98, 175, 110, 200);
+            ctx.bezierCurveTo(128, 225, 146, 210, 154, 185);
+            ctx.bezierCurveTo(158, 160, 150, 140, 112, 140);
+            ctx.closePath();
+            ctx.fill();
+
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // Brown Carpet Floor Texture
+        function createFloorTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#b8860b';
+            ctx.fillRect(0, 0, 128, 128);
+            
+            for (let i = 0; i < 2000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? '#966f12' : '#ca9a1c';
+                ctx.fillRect(Math.random() * 128, Math.random() * 128, 2, 2);
+            }
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            return texture;
+        }
+
+        // Ceiling Tile Texture
+        function createCeilingTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#dcdcdc';
+            ctx.fillRect(0, 0, 128, 128);
+            ctx.strokeStyle = '#a9a9a9';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(0, 0, 128, 128);
+
+            for (let i = 0; i < 500; i++) {
+                ctx.fillStyle = '#b0b0b0';
+                ctx.fillRect(Math.random() * 128, Math.random() * 128, 1, 1);
+            }
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            return texture;
+        }
+
+        const brickTexture = createBrickTexture();
+        const monsterTexture = createMonsterTexture();
+        const floorTexture = createFloorTexture();
+        const ceilingTexture = createCeilingTexture();
+
+        // --- 3. MAZE MAP DEFINITION ---
+        // 1 = Wall, 0 = Empty Path, 2 = Coin, 3 = Player Start, 4 = Monster Spawn
+        const mazeGrid = [
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 3, 0, 2, 1, 2, 4, 0, 2, 1, 2, 0, 1],
+            [1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1],
+            [1, 2, 0, 0, 0, 2, 0, 1, 4, 0, 2, 0, 1],
+            [1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1],
+            [1, 2, 1, 2, 4, 1, 2, 0, 2, 1, 2, 0, 1],
+            [1, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1],
+            [1, 2, 0, 2, 0, 2, 1, 2, 4, 0, 2, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        ];
+
+        const UNIT_SIZE = 4;
+        const wallGeometry = new THREE.BoxGeometry(UNIT_SIZE, UNIT_SIZE, UNIT_SIZE);
+        const wallMaterial = new THREE.MeshBasicMaterial({ map: brickTexture });
+
+        const walls = [];
+        const coins = [];
+        const monsters = [];
+        let totalCoins = 0;
+        let collectedCoins = 0;
+
+        // Build Maze Environment
+        const mazeWidth = mazeGrid[0].length * UNIT_SIZE;
+        const mazeHeight = mazeGrid.length * UNIT_SIZE;
+
+        for (let row = 0; row < mazeGrid.length; row++) {
+            for (let col = 0; col < mazeGrid[row].length; col++) {
+                const cell = mazeGrid[row][col];
+                const x = col * UNIT_SIZE - mazeWidth / 2 + UNIT_SIZE / 2;
+                const z = row * UNIT_SIZE - mazeHeight / 2 + UNIT_SIZE / 2;
+
+                if (cell === 1) { // Wall
+                    const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                    wall.position.set(x, UNIT_SIZE / 2, z);
+                    scene.add(wall);
+                    walls.push(wall);
+                } else if (cell === 2) { // Coin placement
+                    createCoin(x, z);
+                } else if (cell === 4) { // Monster Spawn Point
+                    createMonster(x, z);
+                }
+
+                if (cell === 3) { // Player Start
+                    camera.position.set(x, UNIT_SIZE / 2, z);
+                }
+            }
+        }
+
+        // Add Floor & Ceiling
+        floorTexture.repeat.set(mazeGrid[0].length * 2, mazeGrid.length * 2);
+        ceilingTexture.repeat.set(mazeGrid[0].length * 2, mazeGrid.length * 2);
+
+        const floorGeo = new THREE.PlaneGeometry(mazeWidth, mazeHeight);
+        const floorMat = new THREE.MeshBasicMaterial({ map: floorTexture });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        scene.add(floor);
+
+        const ceilingGeo = new THREE.PlaneGeometry(mazeWidth, mazeHeight);
+        const ceilingMat = new THREE.MeshBasicMaterial({ map: ceilingTexture });
+        const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
+        ceiling.rotation.x = Math.PI / 2;
+        ceiling.position.y = UNIT_SIZE;
+        scene.add(ceiling);
+
+        // --- 4. COIN & MONSTER CREATION ---
+        function createCoin(x, z) {
+            const coinGeo = new THREE.CylinderGeometry(0.6, 0.6, 0.1, 16);
+            const coinMat = new THREE.MeshBasicMaterial({ color: 0xffd700 });
+            const coin = new THREE.Mesh(coinGeo, coinMat);
+            coin.rotation.x = Math.PI / 2;
+            coin.position.set(x, UNIT_SIZE / 2, z);
+            
+            scene.add(coin);
+            coins.push(coin);
+            totalCoins++;
+        }
+
+        function createMonster(x, z) {
+            const spriteMaterial = new THREE.SpriteMaterial({ map: monsterTexture, transparent: true });
+            const monster = new THREE.Sprite(spriteMaterial);
+            monster.scale.set(2.0, 3.0, 1);
+            monster.position.set(x, UNIT_SIZE / 2 - 0.1, z);
+            
+            // Random direction movement vector
+            monster.dirX = (Math.random() > 0.5 ? 1 : -1) * 0.03;
+            monster.dirZ = (Math.random() > 0.5 ? 1 : -1) * 0.03;
+
+            scene.add(monster);
+            monsters.push(monster);
+        }
+
+        document.getElementById('coin-counter').innerText = `COINS: 0 / ${totalCoins}`;
+
+        // --- 5. CONTROLS & MOVEMENT ---
+        const keys = {};
+        window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+        window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+        const moveSpeed = 0.08;
+        const rotateSpeed = 0.03;
+
+        function updateMonsters() {
+            for (let monster of monsters) {
+                const nextX = monster.position.x + monster.dirX;
+                const nextZ = monster.position.z + monster.dirZ;
+
+                let collide = false;
+                const monsterRadius = 0.6;
+
+                for (let wall of walls) {
+                    const wallBox = new THREE.Box3().setFromObject(wall);
+                    const monsterBox = new THREE.Box3(
+                        new THREE.Vector3(nextX - monsterRadius, 0, nextZ - monsterRadius),
+                        new THREE.Vector3(nextX + monsterRadius, UNIT_SIZE, nextZ + monsterRadius)
+                    );
+
+                    if (wallBox.intersectsBox(monsterBox)) {
+                        collide = true;
+                        break;
+                    }
+                }
+
+                if (!collide) {
+                    monster.position.x = nextX;
+                    monster.position.z = nextZ;
+                } else {
+                    // Bounce off walls
+                    monster.dirX = -monster.dirX + (Math.random() - 0.5) * 0.01;
+                    monster.dirZ = -monster.dirZ + (Math.random() - 0.5) * 0.01;
+                }
+
+                // Floating bobbing effect for the ghost
+                monster.position.y = (UNIT_SIZE / 2 - 0.1) + Math.sin(Date.now() * 0.005 + monster.position.x) * 0.15;
+
+                // Monster-Player Collision Check
+                const distToPlayer = camera.position.distanceTo(monster.position);
+                if (distToPlayer < 1.0 && !isInvulnerable && !gameOver) {
+                    takeDamage();
+                }
+            }
+        }
+
+        function takeDamage() {
+            playerLives--;
+            updateHeartsUI();
+
+            if (playerLives <= 0) {
+                gameOver = true;
+                document.getElementById('game-over-screen').style.display = 'block';
+            } else {
+                // Temporary invulnerability frames
+                isInvulnerable = true;
+                let flashes = 0;
+                const flashInterval = setInterval(() => {
+                    flashes++;
+                    document.getElementById('hud').style.opacity = flashes % 2 === 0 ? '1' : '0.2';
+                    if (flashes > 6) {
+                        clearInterval(flashInterval);
+                        document.getElementById('hud').style.opacity = '1';
+                        isInvulnerable = false;
+                    }
+                }, 200);
+            }
+        }
+
+        function updateHeartsUI() {
+            let heartsStr = '';
+            for (let i = 0; i < playerLives; i++) {
+                heartsStr += '❤️';
+            }
+            document.getElementById('hearts').innerText = heartsStr;
+        }
+
+        function updatePlayer() {
+            if (gameOver) return;
+
+            // Turning
+            if (keys['a'] || keys['arrowleft']) {
+                camera.rotation.y += rotateSpeed;
+            }
+            if (keys['d'] || keys['arrowright']) {
+                camera.rotation.y -= rotateSpeed;
+            }
+
+            // Movement vector
+            let moveStep = 0;
+            if (keys['w'] || keys['arrowup']) moveStep = -moveSpeed;
+            if (keys['s'] || keys['arrowdown']) moveStep = moveSpeed;
+
+            if (moveStep !== 0) {
+                const nextX = camera.position.x + Math.sin(camera.rotation.y) * moveStep;
+                const nextZ = camera.position.z + Math.cos(camera.rotation.y) * moveStep;
+
+                // Wall Collision Detection
+                const playerRadius = 0.8;
+                let collide = false;
+
+                for (let wall of walls) {
+                    const wallBox = new THREE.Box3().setFromObject(wall);
+                    const playerBox = new THREE.Box3(
+                        new THREE.Vector3(nextX - playerRadius, 0, nextZ - playerRadius),
+                        new THREE.Vector3(nextX + playerRadius, UNIT_SIZE, nextZ + playerRadius)
+                    );
+
+                    if (wallBox.intersectsBox(playerBox)) {
+                        collide = true;
+                        break;
+                    }
+                }
+
+                if (!collide) {
+                    camera.position.x = nextX;
+                    camera.position.z = nextZ;
+                }
+            }
+
+            // Coin Collection Check
+            for (let i = coins.length - 1; i >= 0; i--) {
+                const coin = coins[i];
+                coin.rotation.z += 0.04;
+
+                const dist = camera.position.distanceTo(coin.position);
+                if (dist < 1.2) {
+                    scene.remove(coin);
+                    coins.splice(i, 1);
+                    collectedCoins++;
+                    document.getElementById('coin-counter').innerText = `COINS: ${collectedCoins} / ${totalCoins}`;
+
+                    if (collectedCoins === totalCoins) {
+                        document.getElementById('win-screen').style.display = 'block';
+                    }
+                }
+            }
+        }
+
+        // --- 6. GAME LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            updatePlayer();
+            updateMonsters();
+            renderer.render(scene, camera);
+        }
+
+        // Handle Window Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
